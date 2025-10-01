@@ -2,7 +2,8 @@
 sudo service docker start
 # Voir les logs de MLflow et MindsDB en même temps
 docker-compose logs -f mlflow-server mindsdb
-
+docker-compose down
+docker-compose up -d
 
 Interfaces Web Disponibles
 http://localhost:9003
@@ -123,3 +124,12 @@ Tout est centralisé et accessible par toute l'équipe
  - Paramètres           - Fichiers de données
  - Métadonnées          - Plots/Images
  - Historique           - Logs texte
+
+ ===================================================
+ MinIO → stockage des données brutes,
+
+PostgreSQL → stockage structuré des métadonnées,
+
+Milvus → stockage et recherche vectorielle des embeddings,
+
+MindsDB → orchestration et exploitation des embeddings dans un workflow ML/LLM.
