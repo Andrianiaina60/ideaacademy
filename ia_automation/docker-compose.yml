@@ -1,0 +1,162 @@
+services:
+  flowise:
+    image: flowiseai/flowise:latest
+    container_name: flowise
+    ports:
+      - "3000:3000"
+    environment:
+      FLOWISE_USERNAME: admin
+      FLOWISE_PASSWORD: Admin123
+      FLOWISE_SECRETKEY: supersecretkey
+    volumes:
+      - ./data/flowise:/root/.flowise
+      - ./flowise-flows:/app/flows
+    restart: unless-stopped
+    networks:
+      - ml_network
+
+  n8n:
+    image: n8nio/n8n:1.103.2
+    container_name: n8n-automation
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: ${N8N_PORT}
+      N8N_PROTOCOL: ${N8N_PROTOCOL}
+      WEBHOOK_URL: ${WEBHOOK_URL}
+      N8N_BASIC_AUTH_ACTIVE: ${N8N_BASIC_AUTH_ACTIVE}
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE}
+      N8N_PERSONALIZATION_ENABLED: ${N8N_PERSONALIZATION_ENABLED}
+      N8N_METRICS: ${N8N_METRICS}
+      N8N_RUNNERS_ENABLED: ${N8N_RUNNERS_ENABLED}
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: ${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/home/node/.n8n/workflows
+    networks:
+      - ml_network
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.1
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    environment:
+      QDRANT__WEB_UI__ENABLED: "true"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - ml_network
+
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.18
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - ml_network
+
+  milvus-standalone:
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v2.5.14
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: mindsdb-s3:9000
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: password
+      MILVUS_LOG_LEVEL: info
+    depends_on:
+      - etcd
+      - mindsdb-s3
+    volumes:
+      - milvus_data:/var/lib/milvus
+      - ./milvus/milvus.yaml:/milvus/configs/milvus.yaml:ro
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - ml_network
+
+  attu:
+    container_name: milvus-attu
+    image: zilliz/attu:v2.4.9
+    restart: always
+    environment:
+      - MILVUS_URL=milvus-standalone:19530
+      - DEFAULT_USER=root
+    ports:
+      - "8001:3000"
+    networks:
+      - ml_network
+    depends_on:
+      - milvus-standalone
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: flowisedb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - ml_network
+
+  # Ajout du service mindsdb-s3
+  mindsdb-s3:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: mindsdb-s3
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: password
+    volumes:
+      - mindsdb_minio_data:/data/minio
+    command: server /data/minio --console-address ":9001"
+    networks:
+      - ml_network
+
+volumes:
+  qdrant_storage:
+  n8n_data:
+  milvus_data:
+  etcd_data:
+  pg_data:
+  mindsdb_minio_data:
+
+networks:
+  ml_network:
+    external: true

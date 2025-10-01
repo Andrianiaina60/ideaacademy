@@ -1,0 +1,125 @@
+
+sudo service docker start
+# Voir les logs de MLflow et MindsDB en même temps
+docker-compose logs -f mlflow-server mindsdb
+
+
+Interfaces Web Disponibles
+http://localhost:9003
+
+http://localhost:47334
+http://127.0.0.1:47334/
+
+http://localhost:5000
+http://127.0.0.1:5000/
+
+http://localhost:8123
+
+
+APIs et Ports
+MinIO API S3 : http://localhost:9002
+MindsDB MySQL : localhost:47335
+PostgreSQL MLflow : localhost:5432
+ClickHouse Native : localhost:19000
+
+=================================================================================================
+minio:
+  image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+  container_name: minio
+  restart: unless-stopped
+  ports:
+    - "9002:9000"  # API (host:container)
+    - "9003:9001"  # Console Web
+  environment:
+    MINIO_ROOT_USER: ${MINDSDB_MINIO_USER}  # Fixed typo
+    MINIO_ROOT_PASSWORD: ${MINDSDB_MINIO_PASSWORD}
+  volumes:
+    - minio_data:/data/minio
+  command: server /data/minio --console-address ":9001"
+  networks:
+    - data-platform-net
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+    interval: 30s
+    timeout: 20s
+    retries: 3
+
+=================================
+CREATE OR REPLACE MODEL mindsdb.prediction_timegpt
+FROM cubejs (
+    SELECT 
+        date,
+        year,
+        month,
+        quarter,
+        week,
+        day,
+        libelleCompteGeneral,  
+        SUM(total_visa) AS total_visa_aggregated,
+
+        SUM(total_recupdossier) AS total_recupdossier_aggregated,
+        SUM(total_noteedit) AS total_noteedit_aggregated,
+        SUM(total_notevalid) AS total_notevalid_aggregated,
+        SUM(total_dmdvirvalid) AS total_dmdvirvalid_aggregated,  
+        SUM(total_ovedit) AS total_ovedit_aggregated,            
+        SUM(total_ovvalid) AS total_ovvalid_aggregated,
+        nomBudget,              
+        nomFinancement,
+        nomCategorie,           
+        libelleCompteContrepartie, 
+        nomPosteAssignataire,   
+        nomPostePayeur
+    FROM public.PhaseFlowAnalysisView
+    GROUP BY 
+        date,
+        year,
+        month,
+        quarter,
+        week,
+        day,
+        libelleCompteGeneral,      
+        nomBudget,                 
+        nomFinancement,
+        nomCategorie,               
+        libelleCompteContrepartie,  
+        nomPosteAssignataire,       
+        nomPostePayeur
+)
+PREDICT total_ovvalid_aggregated
+ORDER BY date
+GROUP BY libelleCompteGeneral
+HORIZON 4
+USING 
+    ENGINE = 'timegpt',
+    timegpt_api_key = 'nixak-PpW9WIyPC3zPyLFWrxTKqRytntrdmE8FAouSIA1jKvefyCWnQPRFFH3j0BZI5sjVUPX92ZOqsrkyv9sF';     
+
+==============================================
+rag embeding =context 
+
+Pourquoi PostgreSQL et pas seulement MinIO ?
+
+PostgreSQL : Optimisé pour les requêtes rapides sur des données structurées (recherche de runs, filtrage par métriques)
+MinIO : Optimisé pour stocker de gros fichiers binaires (modèles entraînés, datasets, graphiques)
+
+Sans PostgreSQL, MLflow utiliserait des fichiers locaux, ce qui serait lent et non-scalable pour une équipe.
+Avec votre configuration, vous avez une architecture professionnelle où :
+
+Les requêtes et recherches sont rapides (PostgreSQL)
+Le stockage des gros fichiers est efficace (MinIO)
+Tout est centralisé et accessible par toute l'équipe    
+┌─────────────────────────────────────────┐
+│         MLflow Tracking Server          │
+│              (Port 5000)                │
+└──────────────┬──────────────┬───────────┘
+               │              │
+       ┌───────▼──────┐  ┌────▼──────────┐
+       │ PostgreSQL   │  │  MinIO (S3)   │
+       │   Backend    │  │   Artifacts   │
+       │    Store     │  │    Store      │
+       └──────────────┘  └───────────────┘
+       
+ Stocke:                Stocke:
+ - Métriques            - Modèles ML (.pkl)
+ - Paramètres           - Fichiers de données
+ - Métadonnées          - Plots/Images
+ - Historique           - Logs texte
